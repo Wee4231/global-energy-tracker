@@ -13,6 +13,7 @@ import asyncio
 import json
 import threading
 import time
+import queue
 from datetime import datetime
 
 st.set_page_config(
@@ -345,57 +346,66 @@ def get_aisstream_key() -> str | None:
         import os
         return os.environ.get("AISSTREAM_API_KEY")
 
-async def _fetch_ais(api_key: str, bbox: list, timeout: int = 8) -> list:
+def _fetch_ais_ws(api_key: str, bbox: list, timeout: int = 10) -> list:
+    """Fetch AIS vessels via WebSocket in a dedicated thread+event loop."""
+    import queue as _queue
+    result_q = _queue.Queue()
+
+    def _run():
+        async def _inner():
+            vessels = []
+            try:
+                import websockets
+                async with websockets.connect(
+                    "wss://stream.aisstream.io/v0/stream",
+                    open_timeout=8,
+                    ping_timeout=None,
+                ) as ws:
+                    await ws.send(json.dumps({
+                        "APIkey": api_key,
+                        "BoundingBoxes": bbox,
+                        "FilterMessageTypes": ["PositionReport"],
+                    }))
+                    deadline = time.time() + timeout
+                    while time.time() < deadline:
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=2.5)
+                            msg = json.loads(raw)
+                            pos = msg.get("Message", {}).get("PositionReport", {})
+                            meta = msg.get("MetaData", {})
+                            lat = pos.get("Latitude")
+                            lon = pos.get("Longitude")
+                            if lat and lon and abs(lat) < 90 and abs(lon) < 180:
+                                vessels.append({
+                                    "lat": lat, "lon": lon,
+                                    "name": meta.get("ShipName", "Unknown").strip() or "Unknown",
+                                    "mmsi": meta.get("MMSI", ""),
+                                    "speed": round(pos.get("Sog", 0), 1),
+                                    "course": round(pos.get("Cog", 0), 0),
+                                })
+                        except (asyncio.TimeoutError, Exception):
+                            break
+            except Exception:
+                pass
+            return vessels
+
+        loop = asyncio.new_event_loop()
+        try:
+            result_q.put(loop.run_until_complete(_inner()))
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=timeout + 5)
     try:
-        import websockets
-    except ImportError:
-        return []
-    vessels = []
-    try:
-        async with websockets.connect(
-            "wss://stream.aisstream.io/v0/stream",
-            ping_timeout=5,
-        ) as ws:
-            sub = {
-                "APIkey": api_key,
-                "BoundingBoxes": bbox,
-                "FilterMessageTypes": ["PositionReport"],
-            }
-            await ws.send(json.dumps(sub))
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
-                    msg = json.loads(raw)
-                    pos = msg.get("Message", {}).get("PositionReport", {})
-                    meta = msg.get("MetaData", {})
-                    if pos and pos.get("Latitude") and pos.get("Longitude"):
-                        vessels.append({
-                            "lat": pos["Latitude"],
-                            "lon": pos["Longitude"],
-                            "name": meta.get("ShipName", "Unknown").strip(),
-                            "mmsi": meta.get("MMSI", ""),
-                            "speed": pos.get("Sog", 0),
-                            "course": pos.get("Cog", 0),
-                        })
-                except asyncio.TimeoutError:
-                    break
+        return result_q.get_nowait()
     except Exception:
-        pass
-    return vessels
+        return []
 
 @st.cache_data(ttl=120)
 def fetch_vessels(api_key: str, bbox_key: str, bbox: list) -> list:
-    result = []
-    def run():
-        nonlocal result
-        loop = asyncio.new_event_loop()
-        result = loop.run_until_complete(_fetch_ais(api_key, bbox))
-        loop.close()
-    t = threading.Thread(target=run)
-    t.start()
-    t.join(timeout=15)
-    return result
+    return _fetch_ais_ws(api_key, bbox)
 
 # ── News Fetching ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=900)
