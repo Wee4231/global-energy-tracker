@@ -610,7 +610,7 @@ def main():
             texttemplate="%{text}",
             textfont={"size": 9},
             showscale=True,
-            colorbar=dict(title="Impact %", tickfont=dict(color="white"), titlefont=dict(color="white")),
+            colorbar=dict(title=dict(text="Impact %", font=dict(color="white")), tickfont=dict(color="white")),
         ))
         fig_h.update_layout(
             paper_bgcolor="#0d1421", plot_bgcolor="#0d1421",
