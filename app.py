@@ -370,6 +370,7 @@ def _fetch_ais_ws(api_key: str, bbox: list, timeout: int = 12) -> tuple:
         async def _inner():
             vessels = []
             error = ""
+            msgs_received = 0
             try:
                 import websockets
                 async with websockets.connect(
@@ -382,13 +383,23 @@ def _fetch_ais_ws(api_key: str, bbox: list, timeout: int = 12) -> tuple:
                     await ws.send(json.dumps({
                         "APIkey": api_key,
                         "BoundingBoxes": formatted_bbox,
-                        "FilterMessageTypes": ["PositionReport"],
+                        # No FilterMessageTypes — accept all to diagnose
                     }))
                     deadline = time.time() + timeout
                     while time.time() < deadline:
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
-                            msg = json.loads(raw)
+                            msgs_received += 1
+                            try:
+                                msg = json.loads(raw)
+                            except Exception:
+                                error = f"json_err:{raw[:80]}"
+                                continue
+                            # Check for API error response
+                            if "Error" in msg or "error" in msg:
+                                error = f"api_err:{msg.get('Error', msg.get('error', raw[:80]))}"
+                                break
+                            msg_type = msg.get("MessageType", "")
                             pos = msg.get("Message", {}).get("PositionReport", {})
                             meta = msg.get("MetaData", {})
                             lat = pos.get("Latitude")
@@ -402,12 +413,16 @@ def _fetch_ais_ws(api_key: str, bbox: list, timeout: int = 12) -> tuple:
                                     "course": round(pos.get("Cog", 0), 0),
                                 })
                         except asyncio.TimeoutError:
-                            continue  # no message in 3s window, keep waiting until deadline
+                            continue  # no message in 3s window, keep waiting
                         except Exception as e:
-                            error = f"recv error: {e}"
+                            error = f"recv:{e}"
                             break
             except Exception as e:
-                error = f"connect error: {e}"
+                error = f"connect:{e}"
+            if not error and msgs_received == 0:
+                error = "connected_ok_but_0_msgs_in_12s — bbox may be empty or key has no coverage"
+            elif not error and not vessels:
+                error = f"connected_ok,{msgs_received}_msgs,no_position_data"
             return vessels, error
 
         loop = asyncio.new_event_loop()
