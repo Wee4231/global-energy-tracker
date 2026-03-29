@@ -641,7 +641,12 @@ def main():
         fig = build_map(selected, vessels if vessels else None)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         if api_key and vessels:
-            st.caption(f"🔵 {len(vessels)} vessels live near {selected} (AIS · updates every 2 min)")
+            st.caption(
+                f"🔵 {len(vessels)} vessels live near {selected} (AIS · updates every 2 min) — "
+                f"Each dot = a real ship broadcasting its position via AIS (Automatic Identification System). "
+                f"All commercial vessels >300 tons are legally required to transmit. "
+                f"Military ships & sanctioned tankers may disable AIS to stay hidden."
+            )
         elif api_key:
             detail = f" ({ais_error})" if ais_error else ""
             st.caption(f"⚠️ No AIS data received{detail}")
