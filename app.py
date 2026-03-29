@@ -361,22 +361,23 @@ def get_aisstream_key() -> str | None:
         import os
         return os.environ.get("AISSTREAM_API_KEY")
 
-def _fetch_ais_ws(api_key: str, bbox: list, timeout: int = 10) -> list:
-    """Fetch AIS vessels via WebSocket in a dedicated thread+event loop."""
+def _fetch_ais_ws(api_key: str, bbox: list, timeout: int = 12) -> tuple:
+    """Fetch AIS vessels via WebSocket. Returns (vessels_list, error_str)."""
     import queue as _queue
     result_q = _queue.Queue()
 
     def _run():
         async def _inner():
             vessels = []
+            error = ""
             try:
                 import websockets
                 async with websockets.connect(
                     "wss://stream.aisstream.io/v0/stream",
-                    open_timeout=8,
+                    open_timeout=10,
                     ping_timeout=None,
                 ) as ws:
-                    # aisstream.io expects [[[lat_min, lon_min], [lat_max, lon_max]], ...]
+                    # aisstream.io format: [[[lat_min, lon_min], [lat_max, lon_max]], ...]
                     formatted_bbox = [[[b[0], b[1]], [b[2], b[3]]] for b in bbox]
                     await ws.send(json.dumps({
                         "APIkey": api_key,
@@ -386,7 +387,7 @@ def _fetch_ais_ws(api_key: str, bbox: list, timeout: int = 10) -> list:
                     deadline = time.time() + timeout
                     while time.time() < deadline:
                         try:
-                            raw = await asyncio.wait_for(ws.recv(), timeout=2.5)
+                            raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
                             msg = json.loads(raw)
                             pos = msg.get("Message", {}).get("PositionReport", {})
                             meta = msg.get("MetaData", {})
@@ -400,11 +401,14 @@ def _fetch_ais_ws(api_key: str, bbox: list, timeout: int = 10) -> list:
                                     "speed": round(pos.get("Sog", 0), 1),
                                     "course": round(pos.get("Cog", 0), 0),
                                 })
-                        except (asyncio.TimeoutError, Exception):
+                        except asyncio.TimeoutError:
+                            continue  # no message in 3s window, keep waiting until deadline
+                        except Exception as e:
+                            error = f"recv error: {e}"
                             break
-            except Exception:
-                pass
-            return vessels
+            except Exception as e:
+                error = f"connect error: {e}"
+            return vessels, error
 
         loop = asyncio.new_event_loop()
         try:
@@ -414,14 +418,14 @@ def _fetch_ais_ws(api_key: str, bbox: list, timeout: int = 10) -> list:
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    t.join(timeout=timeout + 5)
+    t.join(timeout=timeout + 8)
     try:
         return result_q.get_nowait()
     except Exception:
-        return []
+        return [], "thread timeout"
 
 @st.cache_data(ttl=120)
-def fetch_vessels(api_key: str, bbox_key: str, bbox: list) -> list:
+def fetch_vessels(api_key: str, bbox_key: str, bbox: list) -> tuple:
     return _fetch_ais_ws(api_key, bbox)
 
 # ── News Fetching ─────────────────────────────────────────────────────────────
@@ -613,9 +617,10 @@ def main():
     # AIS vessels
     api_key = get_aisstream_key()
     vessels = []
+    ais_error = ""
     if api_key:
         with st.spinner(f"Fetching live AIS vessels near {selected}..."):
-            vessels = fetch_vessels(api_key, selected, cp["bbox"])
+            vessels, ais_error = fetch_vessels(api_key, selected, cp["bbox"])
 
     with col_map:
         fig = build_map(selected, vessels if vessels else None)
@@ -623,7 +628,8 @@ def main():
         if api_key and vessels:
             st.caption(f"🔵 {len(vessels)} vessels live near {selected} (AIS · updates every 2 min)")
         elif api_key:
-            st.caption("⚠️ No AIS data received — check API key or connection")
+            detail = f" ({ais_error})" if ais_error else ""
+            st.caption(f"⚠️ No AIS data received{detail}")
         else:
             st.caption("💡 Add `AISSTREAM_API_KEY` to Streamlit secrets to enable live vessel tracking")
 
