@@ -76,9 +76,9 @@ CHOKEPOINTS = {
             {"country": "🇦🇪 UAE",              "score": 55, "reason": "Fujairah transshipment hub; ADCO domestic exports directly at exit of Hormuz; Abu Dhabi oil trapped"},
             {"country": "🇸🇦 Saudi Arabia",     "score": 50, "reason": "~6M bbl/day via Ras Tanura; partial bypass via East-West Pipeline to Yanbu (Red Sea) — limited capacity"},
             {"country": "🇵🇰 Pakistan",         "score": 45, "reason": "80%+ crude imports from Gulf; PARCO/NRL refineries dependent; economic reserves minimal"},
-            {"country": "🇧🇩 Bangladesh",       "score": 38, "reason": "All oil imports from Gulf; no strategic reserves; power generation fuel entirely at risk"},
-            {"country": "🇶🇦 Qatar",            "score": 35, "reason": "LNG export terminal at Ras Laffan directly inside Gulf; entire LNG revenue stream blocked"},
-            {"country": "🇮🇶 Iraq",             "score": 30, "reason": "Basra Oil Terminal = 90% of Iraq's revenue; all exports blocked; government funding collapse"},
+            {"country": "🇧🇩 Bangladesh",       "score": 62, "reason": "All petroleum products imported from Gulf; no strategic reserves; domestic gas cushions power sector slightly but transport + industry collapse within weeks"},
+            {"country": "🇶🇦 Qatar",            "score": 85, "reason": "Ras Laffan LNG terminal is INSIDE the Gulf — 100% of LNG export revenue (60%+ of GDP) blocked; world's 3rd-largest LNG exporter goes to zero overnight"},
+            {"country": "🇮🇶 Iraq",             "score": 82, "reason": "Basra Oil Terminal = 90% of Iraq's government revenue; all oil exports blocked = immediate state funding collapse; civil services and military pay cease within weeks"},
             {"country": "🇲🇾 Malaysia",         "score": 58, "reason": "~60% crude imports from Middle East; Petronas RAPID refinery (Johor, $27B investment) relies entirely on Gulf feedstock; domestic Sarawak/Sabah output insufficient to cover"},
             {"country": "🇹🇭 Thailand",         "score": 72, "reason": "~70% crude from Middle East; domestic output covers only ~20% of demand; Map Ta Phut industrial complex + Bangkok grid collapse within 2 weeks; no strategic petroleum reserve law enacted"},
             {"country": "🇵🇭 Philippines",      "score": 88, "reason": "ZERO domestic crude production; ~90% imports from Middle East; NO strategic reserve whatsoever; gas station closures already occur during minor supply delays — full Hormuz blockage = nationwide fuel collapse within days"},
@@ -376,9 +376,11 @@ def _fetch_ais_ws(api_key: str, bbox: list, timeout: int = 10) -> list:
                     open_timeout=8,
                     ping_timeout=None,
                 ) as ws:
+                    # aisstream.io expects [[[lat_min, lon_min], [lat_max, lon_max]], ...]
+                    formatted_bbox = [[[b[0], b[1]], [b[2], b[3]]] for b in bbox]
                     await ws.send(json.dumps({
                         "APIkey": api_key,
-                        "BoundingBoxes": bbox,
+                        "BoundingBoxes": formatted_bbox,
                         "FilterMessageTypes": ["PositionReport"],
                     }))
                     deadline = time.time() + timeout
@@ -723,7 +725,10 @@ def main():
                 "% World LNG":       f'{data["pct_global_lng"]}%' if data["pct_global_lng"] else "—",
                 "Vessels/day":       f'~{data["daily_vessels"]:,}',
                 "Restricted To":     restricted,
-                "Most Impacted":     data["affected_countries"][0]["country"],
+                "Most Impacted (≥70%)": ", ".join(
+                    item["country"] for item in sorted(data["affected_countries"], key=lambda x: x["score"], reverse=True)
+                    if item["score"] >= 70
+                ) or data["affected_countries"][0]["country"],
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
