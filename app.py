@@ -629,27 +629,48 @@ def main():
         st.markdown("---")
         render_legend()
 
-    # AIS vessels
+    # AIS vessels — keep last known positions in session_state so map stays populated
+    # even when aisstream.io free tier is temporarily silent
+    cache_key = f"ais_vessels_{selected}"
+    cache_ts_key = f"ais_ts_{selected}"
+
     api_key = get_aisstream_key()
     vessels = []
     ais_error = ""
     if api_key:
         with st.spinner(f"Fetching live AIS vessels near {selected}..."):
             vessels, ais_error = fetch_vessels(api_key, selected, cp["bbox"])
+        if vessels:
+            st.session_state[cache_key] = vessels
+            st.session_state[cache_ts_key] = datetime.now()
+
+    # Fall back to cached vessels if fresh fetch returned nothing
+    using_cached = False
+    cached_age = ""
+    if not vessels and cache_key in st.session_state:
+        vessels = st.session_state[cache_key]
+        using_cached = True
+        delta = int((datetime.now() - st.session_state[cache_ts_key]).total_seconds())
+        cached_age = f"{delta}s ago" if delta < 120 else f"{delta//60}m ago"
 
     with col_map:
         fig = build_map(selected, vessels if vessels else None)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        if api_key and vessels:
+        if api_key and vessels and not using_cached:
             st.caption(
                 f"🔵 {len(vessels)} vessels live near {selected} (AIS · updates every 2 min) — "
                 f"Each dot = a real ship broadcasting its position via AIS (Automatic Identification System). "
                 f"All commercial vessels >300 tons are legally required to transmit. "
                 f"Military ships & sanctioned tankers may disable AIS to stay hidden."
             )
+        elif api_key and vessels and using_cached:
+            st.caption(
+                f"🔵 {len(vessels)} vessels near {selected} — last updated {cached_age} "
+                f"(AIS stream temporarily silent; showing cached positions) — "
+                f"Each dot = a real ship broadcasting via AIS. Military & sanctioned tankers may disable AIS to stay hidden."
+            )
         elif api_key:
-            detail = f" ({ais_error})" if ais_error else ""
-            st.caption(f"⚠️ No AIS data received{detail}")
+            st.caption("⚠️ No AIS data yet — aisstream.io free tier is intermittent; will display vessels when data arrives")
         else:
             st.caption("💡 Add `AISSTREAM_API_KEY` to Streamlit secrets to enable live vessel tracking")
 
